@@ -63,7 +63,8 @@ rx_thread(void *data)
 	{	
 		uint32_t i = rand;
 
-		usleep(i);
+		if (!targ->id)
+			usleep(i);
 
 		barrier_wait(targ->id, targ->b);
 		//D("Thread: %d barrier passed", targ->id);

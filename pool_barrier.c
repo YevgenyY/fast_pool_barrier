@@ -18,7 +18,7 @@ int barrier_destroy(barrier_t *b)
 
 	pthread_spin_unlock(&b->sl);
 
-	while (b->total != 0)
+	while (b->count != 0)
 	{
 		/* Wait until everyone exits the barrier */
 		usleep(1000);
@@ -31,7 +31,7 @@ int barrier_destroy(barrier_t *b)
 	return 0;
 }
 
-int barrier_init(barrier_t *b, uint16_t count)
+int barrier_init(barrier_t *b, uint16_t total)
 {
 	/* Init spinlocks */
 	if(pthread_spin_init(&b->sl, PTHREAD_PROCESS_PRIVATE))
@@ -40,8 +40,8 @@ int barrier_init(barrier_t *b, uint16_t count)
 		exit(-1);
 	}
 
-	b->count = count;
-	b->total = 0;
+	b->count = 0;
+	b->total = total;
 
 	D("Barrier created");
 
@@ -51,44 +51,52 @@ int barrier_init(barrier_t *b, uint16_t count)
 #define MY_IDS id==0 || id==1
 int barrier_wait(uint16_t id, barrier_t *b)
 {
+	uint16_t ret;
 	uint64_t tries;
 
 	tries = 0;
 
-	if (MY_IDS) D("!!!Thread: %d enter the barrier, total: %lu", id, b->total);
-	//pthread_spin_lock(&b->sl);
-	//b->total++; 
-	//pthread_spin_unlock(&b->sl);
-	atomic_fetch_add(&b->total, 1);
+	if (MY_IDS) D("!!!Thread: %d enter the barrier, count: %lu", id, b->count);
 
+	while(1)
+	{
+		uint64_t num;
+	    atomic_fetch_add(&b->count, 1);
 
-	if (b->total == b->count)
-	{
-		if (MY_IDS) D("!!!Thread: %d leave the barrier, total: %lu", id, b->total);
-		return 0;
-	}
-	else
-	{
-		while (b->total < b->count)
+		num = atomic_read(b->count);
+
+		D("thread: %d, num: %lu, count: %lu", id, num, b->count);
+
+		if (b->count < b->total)
 		{
-			if (tries++ < 1000000) // make 1000 spins
-				continue;
+			while (atomic_read(b->count) == num)
+			{
+				/* spin here */
+				if(tries++ < 1000000)
+					continue;
 
-			/* Wait until enough threads enter the barrier */
-			if (MY_IDS) D("!!!Thread: %d make usleep, total: %lu", id, b->total);
-			usleep(1);
-			tries = 0;
+				//if (MY_IDS) D("!!!Thread: %d make usleep, count: %lu", id, b->count);
+
+				/* Wait until another threads enter the barrier */
+				usleep(1);
+				tries = 0;
+			}
+
+			if (MY_IDS) D("!!!Thread: %d leave the barrier, count: %lu", id, b->count);
+			ret = 0;
+			break;
 		}
-		if (MY_IDS) D("!!!Thread: %d leave and reset the barrier, total: %lu", id, b->total);
 
-		/* reset counter and leave barrier */
-		//pthread_spin_lock(&b->sl);
-		//b->total = 0;
-		//pthread_spin_unlock(&b->sl);
-		//atomic_cmp_set(b->total, 2, 0);
-		xchg_64(&b->total, 0);
+		if(b->count == b->total)
+		{
+			barrier();
+			b->count = 0;
+			barrier();
 
-		return 0;
+			if (MY_IDS) D("!!!Thread: %d leave and reset the barrier, count: %lu", id, b->count);
+			break;
+		}
 	}
+	return ret;
 }
 

@@ -20,6 +20,15 @@ struct barrier_t
 	pthread_spinlock_t sl;
 };
 
+/* Creates a compiler level memory barrier forcing 
+ * optimizer to not re-order memory accesses across 
+ * the barrier. 
+ */
+#define barrier() asm volatile("": : :"memory")
+
+/* Force a read of variable */
+#define atomic_read(V) (*(volatile typeof(V) *)&(V))
+
 /*
  * "cmpxchgq  r, [m]":
  * 
@@ -31,7 +40,11 @@ struct barrier_t
  *         rax = [m];
  *     }
  *
- * 
+ * Compare EDX:EAX register to 64-bit memory location. 
+ * If equal, set the zero flag (ZF) to 1 and copy the 
+ * ECX:EBX register to the memory location. Otherwise, 
+ * copy the memory location to EDX:EAX and clear the zero flag)
+ *
  * The "r" is any register, %rax (%r0) - %r16.
  * The "=a" and "a" are the %rax register.
  * Although we can return result in any register, we use "a" because it is
@@ -82,7 +95,9 @@ atomic_fetch_add(uint64_t *value, uint64_t add)
     return add;
 }
 
-/* Atomic 64 bit exchange */
+/* Atomic 64 bit exchange 
+ *
+*/
 static inline uint64_t xchg_64(void *ptr, uint64_t x)
 {
 	__asm__ __volatile__("lock;"
