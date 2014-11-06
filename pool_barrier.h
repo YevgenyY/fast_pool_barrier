@@ -85,7 +85,8 @@ atomic_fetch_add(uint64_t *value, uint64_t add)
 /* Atomic 64 bit exchange */
 static inline uint64_t xchg_64(void *ptr, uint64_t x)
 {
-	__asm__ __volatile__("xchgq %0,%1"
+	__asm__ __volatile__("lock;"
+		   		"xchgq %0,%1"
 				:"=r" ((uint64_t) x)
 				:"m" (*(volatile uint64_t *)ptr), "0" (x)
 				:"memory");
