@@ -1,0 +1,10 @@
+*.o
+.*.swp
+.*.swo
+*~
+ixigen
+tags
+*.core
+*.swo
+*debug*
+barrier_test
