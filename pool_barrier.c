@@ -1,3 +1,6 @@
+#include <sys/types.h>
+#include <machine/atomic.h>
+
 #include "pool_barrier.h"
 
 #define D(format, ...) do {                                     \
@@ -7,16 +10,11 @@
         (int)_xxts.tv_sec %1000, (int)_xxts.tv_usec,            \
         __FUNCTION__, __LINE__, ##__VA_ARGS__);                 \
         } while (0)
-
 #define BARRIER_FLAG 1000
 int barrier_destroy(barrier_t *b)
 {
-	pthread_spin_lock(&b->sl);
-
-	if (b->total != 0)
-		b->total--;
-
-	pthread_spin_unlock(&b->sl);
+	if (b->count != 0)
+		b->count--;
 
 	while (b->count != 0)
 	{
@@ -24,79 +22,111 @@ int barrier_destroy(barrier_t *b)
 		usleep(1000);
 	}
 
-	pthread_spin_destroy(&b->sl);
-
-	//D("Barrier destroyed");
+	D("Barrier destroyed");
 
 	return 0;
 }
 
 int barrier_init(barrier_t *b, uint16_t total)
 {
-	/* Init spinlocks */
-	if(pthread_spin_init(&b->sl, PTHREAD_PROCESS_PRIVATE))
-	{
-		perror("spinlock_init failed");
-		exit(-1);
-	}
-
 	b->count = 0;
 	b->total = total;
+	b->go_master = 1;
+	b->go_worker = 1;
 
 	D("Barrier created");
 
 	return 0;
 }
 
-#define MY_IDS id==0 || id==1
-int barrier_wait(uint16_t id, barrier_t *b)
+//D("Thread %d atomic_fetch_add returns: %p", id, atomic_fetch_add(&(b->count), 1));
+//D("thread: %d, num: %lu, count: %lu", id, num, b->count);
+//if (MY_IDS) D("Thread: %d leave and reset the barrier %p, count: %x", id, b,  b->count);
+//if (MY_IDS) D("Thread: %d leave the barrier %p, count: %x", id, b, b->count);
+#if 1 
+#define MY_IDS id==7 || id==15
+#define MAX_RING 1 
+void barrier_wait(uint16_t id, barrier_t *b)
 {
-	uint16_t ret;
-	uint64_t tries;
+	uint32_t tries;
+	uint32_t count, total;
+	uint32_t *go_local;
 
 	tries = 0;
+	total = b->total;
 
-	if (MY_IDS) D("!!!Thread: %d enter the barrier, count: %lu", id, b->count);
+	go_local = id < MAX_RING ? &b->go_master : &b->go_worker;
 
-	while(1)
+	// atomic_cmp_set returns 0 if b->count==0
+	while (atomic_cmp_set(&b->lock, 0, 1) != 0)
+		;
+
+	b->count++;
+	count = b->count;
+
+	*go_local = count < total ? 0 : 1;
+
+	b->lock = 0;
+
+	while (1)
 	{
-		uint64_t num;
-	    atomic_fetch_add(&b->count, 1);
-
-		num = atomic_read(b->count);
-
-		D("thread: %d, num: %lu, count: %lu", id, num, b->count);
-
-		if (b->count < b->total)
+		while (atomic_cmp_set(&b->lock, 0, 1) != 0)
+			;
+		if(!*go_local)
 		{
-			while (atomic_read(b->count) == num)
-			{
-				/* spin here */
-				if(tries++ < 1000000)
-					continue;
+			b->lock = 0;
 
-				//if (MY_IDS) D("!!!Thread: %d make usleep, count: %lu", id, b->count);
+			/* spin here */
+			if(tries++ < 100000)
+				continue;
 
-				/* Wait until another threads enter the barrier */
-				usleep(1);
-				tries = 0;
-			}
-
-			if (MY_IDS) D("!!!Thread: %d leave the barrier, count: %lu", id, b->count);
-			ret = 0;
-			break;
-		}
-
-		if(b->count == b->total)
+			/* Wait until another threads enter the barrier */
+			tries = 0;
+		} else 
+		/* second thread has entered the barrier */
 		{
-			barrier();
+			b->go_master = 1;
+			b->go_worker = 1;
 			b->count = 0;
-			barrier();
 
-			if (MY_IDS) D("!!!Thread: %d leave and reset the barrier, count: %lu", id, b->count);
-			break;
+			b->lock = 0;
+			return;
 		}
 	}
-	return ret;
+	D("A BUG!!! YOU MUST NOT BE HERE.");
 }
 
+#endif
+
+#if 0 
+void barrier_wait(uint16_t id, struct barrier_t *b) {
+	uint32_t myCount = 0;
+	uint32_t myTotal = 0;
+
+	/* Get a lock on the barrier's shared data 
+	 * atomic_cmp_set returns:
+	 *  0 if lock == 0
+	 *  1 if lock == 1
+	 *  and set lock to 1
+	 */
+	while (atomic_cmp_set(&b->lock, 0, 1) != 0)
+		;
+	/* Keep a local copy of the limit (which will not change),
+	 * add this thread to the number waiting, and release the lock */
+	myTotal = b->total;
+
+	b->count++;
+	b->lock = 0;
+
+	/* Now wait for other threads to reach the barrier */
+	while (myCount < myTotal ) 
+	{
+		/* Lock the barrier data, copy the count, and release
+		 * the lock. */
+		while (atomic_cmp_set(&b->lock, 0, 1) != 0)
+			;
+		myCount = b->count;
+		b->lock = 0;
+	} 
+}
+#endif

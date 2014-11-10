@@ -15,9 +15,14 @@
 typedef struct barrier_t barrier_t;
 struct barrier_t
 {
-	uint64_t count;	/* barrier threshold */
-	uint64_t total; /* total threads waiting barrier */
-	pthread_spinlock_t sl;
+	volatile uint32_t count;	/* barrier threshold */
+	uint32_t total; /* total threads waiting barrier */
+	uint32_t lock;
+
+	uint32_t go_worker;
+	uint32_t go_master;
+
+	//pthread_spinlock_t sl;
 };
 
 /* Creates a compiler level memory barrier forcing 
@@ -54,18 +59,16 @@ struct barrier_t
  * The "cc" means that flags were changed.
  */
 
-static inline uint64_t
-atomic_cmp_set(uint64_t *lock, uint64_t old, uint64_t set)
+static inline uint32_t
+atomic_cmp_set(volatile uint32_t *l, uint32_t old, uint32_t set)
 {
 	u_char  res;
 
 	__asm__ volatile (
  
-	"    lock;"
-	"    cmpxchgq  %3, %1;   "
-	"    sete      %0;       "
+	"lock; cmpxchgl  %3, %1;   "
 	
-	: "=a" (res) : "m" (*lock), "a" (old), "r" (set) : "cc", "memory");
+	: "=a" (res) : "m" (*l), "a" (old), "r" (set) : "cc", "memory");
 
 	return res;
 }
@@ -82,29 +85,29 @@ atomic_cmp_set(uint64_t *lock, uint64_t old, uint64_t set)
  * The "cc" means that flags were changed.
  */
 
-static inline uint64_t
-atomic_fetch_add(uint64_t *value, uint64_t add)
+static inline uint32_t
+atomic_fetch_add(volatile uint32_t *value, uint32_t add)
 {
     __asm__ volatile (
 
-	"    lock;"
-    "    xaddq  %0, %1;   "
+    "lock; xaddl  %0, %1;   "
 
     : "+r" (add) : "m" (*value) : "cc", "memory");
 
-    return add;
+    return (*value);
 }
 
 /* Atomic 64 bit exchange 
  *
 */
-static inline uint64_t xchg_64(void *ptr, uint64_t x)
+static inline uint32_t xchg_32(uint32_t *ptr, uint32_t x)
 {
 	__asm__ __volatile__("lock;"
-		   		"xchgq %0,%1"
-				:"=r" ((uint64_t) x)
-				:"m" (*(volatile uint64_t *)ptr), "0" (x)
+		   		"xchgl %0,%1"
+				:"=r" ((uint32_t) x)
+				:"m" (*(volatile uint32_t *)ptr), "0" (x)
 				:"memory");
 
 	return x;
 }
+

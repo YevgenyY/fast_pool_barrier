@@ -37,40 +37,86 @@ int barrier_destroy(barrier_t *b);
 int barrier_init(barrier_t *b, uint16_t count);
 int barrier_wait(uint16_t id, barrier_t *b);
 
-barrier_t rx_barrier;
-
 struct targ {
 	uint16_t id;		/* thread number in the struct targ targs[num] array */
 	uint8_t used;
 	barrier_t *b;
+	uint32_t lock;
 
 	pthread_t thread;	/* thread descriptor for pthread */
 };
 
 struct targ targs[MAX_THREAD];
-
-
 #define BARRIER_FLAG (1UL<<31)
+#define EBUSY 1
+
+/*
+ * pool_spinlock
+ *
+*/
+static inline void pool_spinlock(uint16_t id, volatile uint32_t *lock)
+{
+	while(1)
+	{
+		if (!xchg_32(lock, EBUSY)) return;
+
+		while(*lock) usleep(1);
+	}
+
+	return;
+}
+
+static inline void pool_unlock(uint16_t id, volatile uint32_t *lock)
+{
+	barrier();
+	*lock = 0;
+}
+
 
 static void *
 rx_thread(void *data)
 {
 	struct targ *targ = (struct targ *)data;
+	barrier_t *b;
+	uint32_t ret;
 
-	//D("I am thread: %d", targ->id);
+#if 0 
+	if(targ->id)
+		return;
+
+	b = targ->b;
+	b->count = 1;
+	ret = 0;
+
+	ret = atomic_cmp_set(&b->count, 0, 1);
+	pthread_exit(NULL);	
+
+#if 0
+	ret =  xchg_32(&b->count, 0);
+	pthread_exit(NULL);	
+#endif	
+	// DEBUG
+	
+#endif
+	
 
 	while(targ->used)
 	{	
-		uint32_t i = rand;
-
-		if (!targ->id)
-			usleep(i);
+		uint32_t i;
 
 		barrier_wait(targ->id, targ->b);
-		//D("Thread: %d barrier passed", targ->id);
+		D("Thread: %d barrier 0 passed", targ->id);
+
+		//for (i=0; i<random(); i++);
+
+		//if (targ->id)
+		//	usleep(1000000);
 
 
-		usleep(10);
+		barrier_wait(targ->id, targ->b);
+		D("Thread: %d barrier 1 passed", targ->id);
+
+		//usleep(10);
 	}
 
 	pthread_exit(NULL);	
@@ -96,12 +142,16 @@ int
 main(int argc, char **argv)
 {
 	int i;
+	barrier_t *rx_barrier;
+
 	D("Start");
 
 	argv = argv;
 	argc = argc;
 
-	barrier_init(&rx_barrier, 2);
+	rx_barrier = malloc(sizeof(struct barrier_t));
+
+	barrier_init(rx_barrier, 2);
 
 	signal(SIGINT, sigint_h); 
 	
@@ -109,7 +159,8 @@ main(int argc, char **argv)
 	{
 		targs[i].id = i;
 		targs[i].used = 1;
-		targs[i].b = &rx_barrier;
+		targs[i].b = rx_barrier;
+		targs[i].lock = 0;
 
 		if (pthread_create(&targs[i].thread, NULL, rx_thread, (void *)&targs[i]) == -1) {
 			D("Unable to create thread %d", i);
@@ -124,7 +175,9 @@ main(int argc, char **argv)
 		D("Thread %d joined", i);
 	}
 
-	barrier_destroy(&rx_barrier);
+	barrier_destroy(rx_barrier);
+
+	free(rx_barrier);
 
 	return 0;
 }
